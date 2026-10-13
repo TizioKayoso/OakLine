@@ -1,0 +1,3 @@
+/target
+*.png
+!docs/images/oakline-demo.png

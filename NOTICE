@@ -1,0 +1,13 @@
+Oakline
+
+The surface rendering pipeline and blocks.json color data are adapted from
+Dynamic Minecraft Mapping Tool (DMMT):
+https://github.com/TizioKayoso/DMMT
+
+Adaptations made in October 2026 replace DMMT's web service and tile pyramid
+with an offline PNG command, add validated region and external chunk decoding, and add
+powered-rail detection, graph reconstruction, station discovery, lane coloring,
+map cropping, and station labels.
+
+DMMT and this derivative are licensed under the GNU General Public License,
+version 3. See LICENSE.
