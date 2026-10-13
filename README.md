@@ -71,7 +71,8 @@ You can also build and run through Cargo:
 cargo run --release --locked -- "/path/to/world" --output oakline.png
 ```
 
-Point Oakline at the **world directory**, which contains a `region/` folder:
+Point Oakline at the **world or dimension directory** containing a `region/`
+folder:
 
 ```text
 My World/
@@ -81,6 +82,14 @@ My World/
 │   ├── r.-1.0.mca
 │   └── ...
 └── ...
+```
+
+If the Overworld is stored in `dimensions/minecraft/overworld/region/`, pass
+that dimension directory:
+
+```bash
+cargo run --release --locked -- "/path/to/world/dimensions/minecraft/overworld" \
+  --output oakline.png
 ```
 
 Close Minecraft or stop the server before scanning so its latest changes are
@@ -94,7 +103,7 @@ oakline [OPTIONS] [SAVE]
 
 | Argument or option | Default | Purpose |
 | --- | --- | --- |
-| `<SAVE>` | Required for rendering | World directory containing `region/`; optional with `--list-blocks`. |
+| `<SAVE>` | Required for rendering | World or dimension directory containing `region/`; optional with `--list-blocks`. |
 | `-o, --output <PATH>` | `oakline.png` | Destination PNG; use a `.png` filename. |
 | `--support-block <BLOCK>` | `minecraft:oak_planks` | Block directly below active powered rails; repeat the flag or comma-separate several IDs. |
 | `--list-blocks` | — | Print all supported block IDs from `blocks.json`, then exit. |
@@ -212,9 +221,10 @@ fallback color.
 | Area | Current behavior |
 | --- | --- |
 | Minecraft edition | Java Edition saves. Bedrock saves are unsupported. |
-| Save layout | Modern Anvil block palettes, using the Java 1.18+ section layout. Legacy formats are unsupported. |
+| Save layout | Modern Anvil `sections` and block-state palettes. Older chunk layouts are unsupported. |
+| Block-state palettes | Block ID strings and state compounds using either `id`/`properties` or `Name`/`Properties`; default states are supported. |
 | Minecraft 26.3 | Intended target; |
-| Dimension | The Overworld, read from the supplied world's `region/` directory. |
+| Dimension | The Overworld, read from `region/` under the supplied world or dimension directory. |
 | Operating system | Validated on Linux. Windows and macOS have not been tested. |
 | Surface style | Block colors and height shading; resource-pack textures and biome-specific tints are unsupported. |
 | Station naming | Generated `S#` IDs. Signs and station names are not read. |
@@ -240,7 +250,7 @@ Further limits to keep in mind:
 | Symptom | What to check |
 | --- | --- |
 | “No save was given” | Pass a world directory. A PNG belongs after `--output`; `--list-blocks` works without a save. |
-| “The region directory is missing” | Pass the world directory, not `level.dat`, an individual `.mca`, or the `region/` directory itself. |
+| “The region directory is missing” | Pass the world or dimension directory containing `region/`, such as `dimensions/minecraft/overworld/`. |
 | No active powered rails on the selected support blocks | Check the saved power state and the block directly below the rail. Choose its ID with `--support-block` and save while the rails are powered. |
 | A support block is rejected | Run `--list-blocks` to see every ID from `blocks.json`. Short Minecraft names and namespaced IDs are accepted. |
 | A curve or ordinary-rail section is cut off | Increase `--gap`, then check that the route contains connected ordinary rails. |

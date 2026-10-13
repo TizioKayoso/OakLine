@@ -74,11 +74,34 @@ struct BlockStates {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(from = "BlockStateRepr")]
 struct BlockState {
-    #[serde(rename = "Name")]
     name: String,
-    #[serde(rename = "Properties", default)]
     properties: BlockProperties,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum BlockStateRepr {
+    Id(String),
+    State {
+        #[serde(rename = "Name", alias = "id", alias = "")]
+        name: String,
+        #[serde(rename = "Properties", alias = "properties", default)]
+        properties: BlockProperties,
+    },
+}
+
+impl From<BlockStateRepr> for BlockState {
+    fn from(value: BlockStateRepr) -> Self {
+        match value {
+            BlockStateRepr::Id(name) => Self {
+                name,
+                properties: BlockProperties::default(),
+            },
+            BlockStateRepr::State { name, properties } => Self { name, properties },
+        }
+    }
 }
 
 #[derive(Default, Deserialize, Debug)]
@@ -201,7 +224,12 @@ fn prepare_block(block: &BlockState, support_blocks: &[String]) -> PaletteEntry 
     let ordinary = block.name == "minecraft:rail";
     let powered = block.name == "minecraft:powered_rail"
         && block.properties.powered.as_deref() == Some("true");
-    let shape = block.properties.shape.as_deref();
+    // Compact palette IDs omit properties when the block uses its defaults.
+    let shape = block
+        .properties
+        .shape
+        .as_deref()
+        .or_else(|| (ordinary || powered).then_some("north_south"));
     let exits = rail_exits(shape);
     let ascending = match shape {
         Some("ascending_north") => NORTH,
@@ -598,6 +626,24 @@ mod tests {
         ])
     }
 
+    fn compact_block(name: &str, properties: &[(&'static str, &str)]) -> Value {
+        if properties.is_empty() {
+            compound([("", Value::String(name.into()))])
+        } else {
+            compound([
+                ("id", Value::String(name.into())),
+                (
+                    "properties",
+                    compound(
+                        properties
+                            .iter()
+                            .map(|&(key, value)| (key, Value::String(value.into()))),
+                    ),
+                ),
+            ])
+        }
+    }
+
     fn packed(indices: &[usize], palette_len: usize) -> Vec<i64> {
         let bits = (usize::BITS - (palette_len - 1).leading_zeros()).max(4) as usize;
         let per_long = 64 / bits;
@@ -613,6 +659,14 @@ mod tests {
     }
 
     fn chunk_bytes_with_support(support_block: &str) -> Vec<u8> {
+        chunk_bytes_with_block_format(support_block, block, false)
+    }
+
+    fn chunk_bytes_with_block_format(
+        support_block: &str,
+        block: fn(&str, &[(&'static str, &str)]) -> Value,
+        compact: bool,
+    ) -> Vec<u8> {
         let palette = vec![
             block("minecraft:air", &[]),
             block(support_block, &[]),
@@ -640,21 +694,31 @@ mod tests {
         indices[4 * 256 + 3 * 16 + 1] = 1;
         indices[5 * 256 + 3 * 16 + 1] = 5;
         let data = packed(&indices, palette.len());
-        fastnbt::to_bytes(&compound([
-            ("DataVersion", Value::Int(5000)),
+        let mut sections = vec![compound([
+            ("Y", Value::Byte(-1)),
             (
-                "sections",
-                Value::List(vec![compound([
-                    ("Y", Value::Byte(-1)),
-                    (
-                        "block_states",
-                        compound([
-                            ("palette", Value::List(palette)),
-                            ("data", Value::LongArray(LongArray::new(data))),
-                        ]),
-                    ),
-                ])]),
+                "block_states",
+                compound([
+                    ("palette", Value::List(palette)),
+                    ("data", Value::LongArray(LongArray::new(data))),
+                ]),
             ),
+        ])];
+        if compact {
+            sections.push(compound([
+                ("Y", Value::Byte(-4)),
+                (
+                    "block_states",
+                    compound([(
+                        "palette",
+                        Value::List(vec![Value::String("minecraft:bedrock".into())]),
+                    )]),
+                ),
+            ]));
+        }
+        fastnbt::to_bytes(&compound([
+            ("DataVersion", Value::Int(if compact { 5023 } else { 5000 })),
+            ("sections", Value::List(sections)),
         ]))
         .unwrap()
     }
@@ -684,11 +748,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn anvil_nbt_graph_and_png_pipeline_handles_negative_regions() {
+    fn check_anvil_nbt_graph_and_png_pipeline(chunk: Vec<u8>) {
         let temp = TempWorld::new();
         let mut region = Region::create(Cursor::new(Vec::new())).unwrap();
-        region.write_chunk(31, 0, &chunk_bytes()).unwrap();
+        region.write_chunk(31, 0, &chunk).unwrap();
         fs::write(
             temp.0.join("r.-1.0.mca"),
             region.into_inner().unwrap().into_inner(),
@@ -726,6 +789,76 @@ mod tests {
         let png = temp.0.join("map.png");
         image.save(&png).unwrap();
         assert_eq!(image::open(png).unwrap().to_rgb8(), image);
+    }
+
+    #[test]
+    fn anvil_nbt_graph_and_png_pipeline_handles_negative_regions() {
+        check_anvil_nbt_graph_and_png_pipeline(chunk_bytes());
+    }
+
+    #[test]
+    fn compact_palette_with_bedrock_ids_renders_rails_to_png() {
+        check_anvil_nbt_graph_and_png_pipeline(chunk_bytes_with_block_format(
+            "minecraft:oak_planks",
+            compact_block,
+            true,
+        ));
+    }
+
+    #[test]
+    fn palette_ids_and_wrapped_ids_use_default_block_properties() {
+        for name in [
+            "minecraft:bedrock",
+            "minecraft:rail",
+            "minecraft:powered_rail",
+        ] {
+            for entry in [
+                Value::String(name.into()),
+                compact_block(name, &[]),
+                compound([("id", Value::String(name.into()))]),
+                block(name, &[]),
+            ] {
+                let bytes =
+                    fastnbt::to_bytes(&compound([("palette", Value::List(vec![entry]))])).unwrap();
+                let states: BlockStates = fastnbt::from_bytes(&bytes).unwrap();
+                assert_eq!(states.palette[0].name, name);
+                let prepared = prepare_block(&states.palette[0], &[]);
+                if name == "minecraft:rail" {
+                    let rail = prepared.rail.unwrap();
+                    assert!(rail.ordinary);
+                    assert_eq!(rail.exits, NORTH | SOUTH);
+                    assert_eq!(rail.ascending, 0);
+                } else {
+                    assert!(prepared.rail.is_none());
+                }
+                if name == "minecraft:bedrock" {
+                    assert_eq!(prepared.color, block_color(name));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compact_powered_rail_properties_preserve_power_and_slope() {
+        for powered in ["true", "false"] {
+            let entry = compact_block(
+                "minecraft:powered_rail",
+                &[("powered", powered), ("shape", "ascending_north")],
+            );
+            let bytes =
+                fastnbt::to_bytes(&compound([("palette", Value::List(vec![entry]))])).unwrap();
+            let states: BlockStates = fastnbt::from_bytes(&bytes).unwrap();
+            let rail = prepare_block(&states.palette[0], &[]).rail;
+            if powered == "true" {
+                let rail = rail.unwrap();
+                assert!(rail.marker);
+                assert!(!rail.ordinary);
+                assert_eq!(rail.exits, NORTH | SOUTH);
+                assert_eq!(rail.ascending, NORTH);
+            } else {
+                assert!(rail.is_none());
+            }
+        }
     }
 
     #[test]
